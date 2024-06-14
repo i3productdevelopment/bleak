@@ -48,6 +48,7 @@ from bleak_winrt.windows.devices.enumeration import (
     DevicePairingKinds,
     DevicePairingResultStatus,
     DeviceUnpairingResultStatus,
+    DevicePairingRequestedEventArgs,
 )
 from bleak_winrt.windows.foundation import (
     AsyncStatus,
@@ -462,13 +463,14 @@ class BleakClientWinRT(BaseBleakClient):
         self,
         callbacks: Optional[BaseBleakAgentCallbacks],
         protection_level: int = None,
+        ceremony: int = None,
         **kwargs,
     ) -> bool:
         """
         Attempts to pair with the device.
         """
         if callbacks:
-            raise NotImplementedError
+            loop = asyncio.get_running_loop()
 
         # New local device information object created since the object from the requester isn't updated
         device_information = await DeviceInformation.create_from_id_async(
@@ -479,12 +481,35 @@ class BleakClientWinRT(BaseBleakClient):
             and not device_information.pairing.is_paired
         ):
 
-            # Currently only supporting Just Works solutions...
-            ceremony = DevicePairingKinds.CONFIRM_ONLY
+            if ceremony is None:
+                ceremony = DevicePairingKinds.CONFIRM_ONLY
             custom_pairing = device_information.pairing.custom
 
-            def handler(sender, args):
-                args.accept()
+            callback_task = None
+
+            device = BLEDevice(self.address, device_information.name, None, 0)
+
+            def handler(sender, args: DevicePairingRequestedEventArgs):
+                if callbacks:
+                    deferral = args.get_deferral()
+                    if args.pairing_kind == DevicePairingKinds.CONFIRM_ONLY:
+                        args.accept()
+                        # callback_task = loop.create_task(callbacks.confirm(device))
+                        # def callback(v: asyncio.Task[bool]):
+                        #     if v.result:
+                        #         args.accept()
+                        #     deferral.complete()
+                        # callback_task.add_done_callback(callback)
+                    if args.pairing_kind == DevicePairingKinds.PROVIDE_PIN:
+                        callback_task = asyncio.run_coroutine_threadsafe(callbacks.request_pin(device), loop)
+                        # callback_task = loop.create_task(callbacks.request_pin(device))
+                        def callback(v: asyncio.Future[str | None]):
+                            if v.result:
+                                args.accept(v.result)
+                            deferral.complete()
+                        callback_task.add_done_callback(callback)
+                else:
+                    args.accept()
 
             pairing_requested_token = custom_pairing.add_pairing_requested(handler)
             try:
@@ -494,11 +519,13 @@ class BleakClientWinRT(BaseBleakClient):
                     )
                 else:
                     pairing_result = await custom_pairing.pair_async(ceremony)
-
             except Exception as e:
                 raise BleakError("Failure trying to pair with device!") from e
             finally:
                 custom_pairing.remove_pairing_requested(pairing_requested_token)
+                pass
+            
+            del callback_task
 
             if pairing_result.status not in (
                 DevicePairingResultStatus.PAIRED,
