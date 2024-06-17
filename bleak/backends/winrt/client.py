@@ -92,6 +92,7 @@ else:
         DevicePairingKinds,
         DevicePairingResultStatus,
         DeviceUnpairingResultStatus,
+        DevicePairingRequestedEventArgs,
     )
     from bleak_winrt.windows.foundation import (
         AsyncStatus,
@@ -572,7 +573,7 @@ class BleakClientWinRT(BaseBleakClient):
         """Get ATT MTU size for active connection"""
         return self._session.max_pdu_size
 
-    async def pair(self, protection_level: int = None, **kwargs) -> bool:
+    async def pair(self, ceremony: int = None, protection_level: int = None, pin: str = None, **kwargs) -> bool:
         """Attempts to pair with the device.
 
         Keyword Args:
@@ -595,12 +596,17 @@ class BleakClientWinRT(BaseBleakClient):
             device_information.pairing.can_pair
             and not device_information.pairing.is_paired
         ):
-            # Currently only supporting Just Works solutions...
-            ceremony = DevicePairingKinds.CONFIRM_ONLY
+            if ceremony is None:
+                ceremony = DevicePairingKinds.CONFIRM_ONLY
+            if ceremony == DevicePairingKinds.PROVIDE_PIN and pin is None:
+                raise BleakError("A PIN code must be provided for the provide pin pairing kind")
             custom_pairing = device_information.pairing.custom
 
-            def handler(sender, args):
-                args.accept()
+            def handler(sender, args: DevicePairingRequestedEventArgs):
+                if args.pairing_kind == DevicePairingKinds.CONFIRM_ONLY:
+                    args.accept()
+                if args.pairing_kind == DevicePairingKinds.PROVIDE_PIN:
+                    args.accept(pin)
 
             pairing_requested_token = custom_pairing.add_pairing_requested(handler)
             try:
