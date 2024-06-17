@@ -491,7 +491,7 @@ class BleakClientWinRT(BaseBleakClient):
 
             def handler(sender, args: DevicePairingRequestedEventArgs):
                 if callbacks:
-                    deferral = args.get_deferral()
+                    # deferral = args.get_deferral()
                     if args.pairing_kind == DevicePairingKinds.CONFIRM_ONLY:
                         args.accept()
                         # callback_task = loop.create_task(callbacks.confirm(device))
@@ -501,13 +501,15 @@ class BleakClientWinRT(BaseBleakClient):
                         #     deferral.complete()
                         # callback_task.add_done_callback(callback)
                     if args.pairing_kind == DevicePairingKinds.PROVIDE_PIN:
-                        callback_task = asyncio.run_coroutine_threadsafe(callbacks.request_pin(device), loop)
-                        # callback_task = loop.create_task(callbacks.request_pin(device))
-                        def callback(v: asyncio.Future[str | None]):
-                            if v.result:
-                                args.accept(v.result)
-                            deferral.complete()
-                        callback_task.add_done_callback(callback)
+                        pin = callbacks.request_pin(device)
+                        args.accept(pin)
+                        # callback_task = asyncio.run_coroutine_threadsafe(callbacks.request_pin(device), loop)
+                        # # callback_task = loop.create_task(callbacks.request_pin(device))
+                        # def callback(v: asyncio.Future[str | None]):
+                        #     if v.result:
+                        #         args.accept(v.result)
+                        #     deferral.complete()
+                        # callback_task.add_done_callback(callback)
                 else:
                     args.accept()
 
@@ -519,11 +521,11 @@ class BleakClientWinRT(BaseBleakClient):
                     )
                 else:
                     pairing_result = await custom_pairing.pair_async(ceremony)
+
             except Exception as e:
                 raise BleakError("Failure trying to pair with device!") from e
             finally:
                 custom_pairing.remove_pairing_requested(pairing_requested_token)
-                pass
             
             del callback_task
 
