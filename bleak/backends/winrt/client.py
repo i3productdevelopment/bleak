@@ -483,33 +483,30 @@ class BleakClientWinRT(BaseBleakClient):
 
             if ceremony is None:
                 ceremony = DevicePairingKinds.CONFIRM_ONLY
+            if ceremony != DevicePairingKinds.CONFIRM_ONLY and not callbacks:
+                raise BleakError("Callbacks are required for pairing ceremonies other than confirm only")
             custom_pairing = device_information.pairing.custom
-
-            callback_task = None
 
             device = BLEDevice(self.address, device_information.name, None, 0)
 
             def handler(sender, args: DevicePairingRequestedEventArgs):
                 if callbacks:
-                    # deferral = args.get_deferral()
+                    deferral = args.get_deferral()
                     if args.pairing_kind == DevicePairingKinds.CONFIRM_ONLY:
                         args.accept()
-                        # callback_task = loop.create_task(callbacks.confirm(device))
-                        # def callback(v: asyncio.Task[bool]):
-                        #     if v.result:
-                        #         args.accept()
-                        #     deferral.complete()
-                        # callback_task.add_done_callback(callback)
+                        callback_future = asyncio.run_coroutine_threadsafe(callbacks.confirm(device), loop)
+                        def callback(v: asyncio.Task[bool]):
+                            if v.result():
+                                args.accept()
+                            deferral.complete()
                     if args.pairing_kind == DevicePairingKinds.PROVIDE_PIN:
-                        pin = callbacks.request_pin(device)
-                        args.accept(pin)
-                        # callback_task = asyncio.run_coroutine_threadsafe(callbacks.request_pin(device), loop)
-                        # # callback_task = loop.create_task(callbacks.request_pin(device))
-                        # def callback(v: asyncio.Future[str | None]):
-                        #     if v.result:
-                        #         args.accept(v.result)
-                        #     deferral.complete()
-                        # callback_task.add_done_callback(callback)
+                        callback_future = asyncio.run_coroutine_threadsafe(callbacks.request_pin(device), loop)
+                        def callback(v: asyncio.Future[str | None]):
+                            result = v.result()
+                            if result:
+                                args.accept(result)
+                            deferral.complete()
+                    callback_future.add_done_callback(callback)
                 else:
                     args.accept()
 
@@ -527,8 +524,6 @@ class BleakClientWinRT(BaseBleakClient):
             finally:
                 custom_pairing.remove_pairing_requested(pairing_requested_token)
             
-            del callback_task
-
             if pairing_result.status not in (
                 DevicePairingResultStatus.PAIRED,
                 DevicePairingResultStatus.ALREADY_PAIRED,
