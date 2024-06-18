@@ -54,6 +54,7 @@ from bleak_winrt.windows.foundation import (
     AsyncStatus,
     EventRegistrationToken,
     IAsyncOperation,
+    Deferral,
 )
 from bleak_winrt.windows.storage.streams import Buffer
 
@@ -489,24 +490,30 @@ class BleakClientWinRT(BaseBleakClient):
 
             device = BLEDevice(self.address, device_information.name, None, 0)
 
+            self.callback_future = None
+
             def handler(sender, args: DevicePairingRequestedEventArgs):
                 if callbacks:
-                    deferral = args.get_deferral()
-                    if args.pairing_kind == DevicePairingKinds.CONFIRM_ONLY:
-                        args.accept()
-                        callback_future = asyncio.run_coroutine_threadsafe(callbacks.confirm(device), loop)
-                        def callback(v: asyncio.Task[bool]):
-                            if v.result():
-                                args.accept()
-                            deferral.complete()
-                    if args.pairing_kind == DevicePairingKinds.PROVIDE_PIN:
-                        callback_future = asyncio.run_coroutine_threadsafe(callbacks.request_pin(device), loop)
-                        def callback(v: asyncio.Future[str | None]):
-                            result = v.result()
-                            if result:
+                    if args.pairing_kind == DevicePairingKinds.DISPLAY_PIN:
+                        self.callback_future = asyncio.run_coroutine_threadsafe(callbacks.display_pin(device, args.pin), loop)
+                        return
+
+                    deferral: Deferral = args.get_deferral()
+                    def callback(v: asyncio.Future):
+                        result = v.result()
+                        if result:
+                            if args.pairing_kind == DevicePairingKinds.PROVIDE_PIN:
                                 args.accept(result)
-                            deferral.complete()
-                    callback_future.add_done_callback(callback)
+                            else:
+                                args.accept()
+                        deferral.complete()
+                    if args.pairing_kind == DevicePairingKinds.PROVIDE_PIN:
+                        self.callback_future = asyncio.run_coroutine_threadsafe(callbacks.request_pin(device), loop)
+                    if args.pairing_kind == DevicePairingKinds.CONFIRM_ONLY:
+                        self.callback_future = asyncio.run_coroutine_threadsafe(callbacks.confirm(device), loop)
+                    if args.pairing_kind == DevicePairingKinds.CONFIRM_PIN_MATCH:
+                        self.callback_future = asyncio.run_coroutine_threadsafe(callbacks.confirm_pin(device, args.pin), loop)
+                    self.callback_future.add_done_callback(callback)
                 else:
                     args.accept()
 
@@ -523,6 +530,9 @@ class BleakClientWinRT(BaseBleakClient):
                 raise BleakError("Failure trying to pair with device!") from e
             finally:
                 custom_pairing.remove_pairing_requested(pairing_requested_token)
+                if self.callback_future:
+                    self.callback_future.cancel()
+                del self.callback_future
             
             if pairing_result.status not in (
                 DevicePairingResultStatus.PAIRED,
